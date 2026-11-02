@@ -1,0 +1,80 @@
+name: Windows game release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Версия релиза (например, v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Build Windows 10/11 x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: 'x64'
+      - name: Install build dependencies
+        run: python -m pip install pygame==2.6.1 pyinstaller==6.11.1
+      - name: Check game rules
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: python -m unittest discover -s tests -v
+      - name: Build standalone executable
+        run: python -m PyInstaller --clean --noconfirm --onefile --windowed --name EpokhaDerzhav --collect-all pygame main.py
+      - name: Check executable startup
+        shell: pwsh
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: |
+          $probe = Join-Path $env:RUNNER_TEMP "epokha-startup-ok.txt"
+          $game = Start-Process -FilePath .\dist\EpokhaDerzhav.exe -ArgumentList @('--smoke-test', ('"{0}"' -f $probe)) -PassThru
+          if (-not $game.WaitForExit(60000)) {
+            taskkill /PID $game.Id /T /F
+            throw "Executable smoke test timed out"
+          }
+          if ($game.ExitCode -ne 0 -or -not (Test-Path $probe)) {
+            throw "Executable smoke test failed: $($game.ExitCode)"
+          }
+          Get-Content $probe
+      - name: Pack Windows download
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package
+          Copy-Item dist/EpokhaDerzhav.exe package/
+          Copy-Item README.md package/
+          Copy-Item WINDOWS_README.txt package/
+          Compress-Archive -Path package/* -DestinationPath EpokhaDerzhav-Windows-x64.zip
+          $hash = (Get-FileHash EpokhaDerzhav-Windows-x64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  EpokhaDerzhav-Windows-x64.zip" | Out-File -Encoding ascii SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EpokhaDerzhav-Windows-x64
+          path: |
+            EpokhaDerzhav-Windows-x64.zip
+            SHA256SUMS.txt
+          if-no-files-found: error
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" EpokhaDerzhav-Windows-x64.zip SHA256SUMS.txt --clobber
+          else
+            gh release create "$RELEASE_TAG" EpokhaDerzhav-Windows-x64.zip SHA256SUMS.txt --target "$GITHUB_SHA" --title "Эпоха держав $RELEASE_TAG" --notes-file RELEASE_NOTES.md
+          fi

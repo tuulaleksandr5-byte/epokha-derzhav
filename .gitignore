@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.spec
+*.log
+*.tmp
+save*.json
+*.zip
+.python-deps/
+portable-build/
+release-support/
+engine_part.py
+ui_part.py
